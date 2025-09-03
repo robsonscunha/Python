@@ -1,55 +1,60 @@
-import os
-import requests
 from flask import Flask, request, jsonify
+import requests
+import os
 
 app = Flask(__name__)
 
-# Variáveis de ambiente no Render
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")              # Token longo prazo
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")                  # Token usado para validação do webhook
+# ⚙️ Configurações do ambiente
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "meu_token_verificacao")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 
+# ✅ Endpoint de verificação do webhook
 @app.route("/webhook", methods=["GET"])
-def verify():
-    """Valida o webhook do WhatsApp"""
+def verify_webhook():
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
-        print("✅ Webhook validado com sucesso")
+        print("✅ Webhook verificado com sucesso!")
         return challenge, 200
-    return "Erro de verificação", 403
+    else:
+        return "Erro de verificação", 403
 
-
+# 📩 Recebimento de mensagens + status
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Recebe mensagens do WhatsApp e envia resposta fixa"""
     data = request.get_json()
-    print("📩 Recebido:", data)
 
     try:
-        entry = data["entry"][0]["changes"][0]["value"]
-        phone_number_id = entry["metadata"]["phone_number_id"]      # ID correto do número
-        from_number = entry["messages"][0]["from"]                  # Número do cliente
-        msg_body = entry["messages"][0]["text"]["body"]
+        changes = data["entry"][0]["changes"][0]["value"]
 
-        # Mensagem fixa de resposta
-        resposta = f"Recebi sua mensagem: {msg_body} ✅"
+        # Caso seja mensagem recebida
+        if "messages" in changes:
+            for message in changes["messages"]:
+                sender = message["from"]
+                text = message.get("text", {}).get("body", "")
+                print(f"📩 Mensagem recebida de {sender}: {text}")
 
-        # Enviar mensagem de volta
-        send_whatsapp_message(phone_number_id, from_number, resposta)
+                # responde automaticamente
+                send_message(sender, f"Recebi sua mensagem: {text} ✅")
 
-    except KeyError:
-        print("⚠️ Nenhuma mensagem encontrada neste payload")
+        # Caso seja atualização de status
+        elif "statuses" in changes:
+            for status in changes["statuses"]:
+                msg_id = status["id"]
+                status_name = status["status"]
+                print(f"📊 Status da mensagem {msg_id}: {status_name}")
+
     except Exception as e:
-        print("❌ Erro no processamento:", e)
+        print(f"⚠️ Erro ao processar webhook: {e}")
 
     return jsonify({"status": "ok"}), 200
 
-
-def send_whatsapp_message(phone_number_id, to, message):
-    """Função que envia mensagem via WhatsApp Cloud API"""
-    url = f"https://graph.facebook.com/v21.0/{phone_number_id}/messages"
+# 📤 Função para enviar mensagens
+def send_message(to, text):
+    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
@@ -58,13 +63,16 @@ def send_whatsapp_message(phone_number_id, to, message):
         "messaging_product": "whatsapp",
         "to": to,
         "type": "text",
-        "text": {"body": message}
+        "text": {"body": text}
     }
 
     response = requests.post(url, headers=headers, json=payload)
-    print("📤 Resposta WhatsApp:", response.status_code, response.text)
-    return response.json()
+    if response.status_code == 200:
+        print("📤 Mensagem enviada com sucesso")
+    else:
+        print(f"❌ Erro ao enviar mensagem: {response.status_code} {response.text}")
 
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
+
